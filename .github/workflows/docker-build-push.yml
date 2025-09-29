@@ -31,13 +31,21 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+          tags: type=raw,value=latest
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./${{ matrix.service }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   cleanup_tags:
     needs: build_and_push
@@ -60,7 +68,8 @@ jobs:
 
       - name: Delete old tags
         run: |
-          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="ghcr.io/$OWNER/${{ matrix.service }}"
           TAGS=$(crane ls $IMAGE_NAME)
           for TAG in $TAGS; do
             if [ "$TAG" != "latest" ]; then
