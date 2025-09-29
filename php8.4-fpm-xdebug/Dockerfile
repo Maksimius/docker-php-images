@@ -1,4 +1,4 @@
-FROM maksimius/php-fpm-extended:8.4-fpm
+FROM ghcr.io/maksimius/php8.4-fpm:latest
 
 COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
 
