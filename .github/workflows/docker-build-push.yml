@@ -94,8 +94,7 @@ jobs:
         service: [php8.4-fpm, php8.4-fpm-xdebug]
     steps:
       - name: Install crane
-        run: |
-          sudo curl -L "https://github.com/google/go-containerregistry/releases/latest/download/crane_Linux_x86_64.tar.gz" | sudo tar -C /usr/local/bin -xz crane
+        uses: iarekylew00t/crane-installer@v4
 
       - name: Log in to GitHub Container Registry with crane
         run: |
