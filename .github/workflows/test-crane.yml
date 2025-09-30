@@ -11,7 +11,7 @@ on:
           - php8.4-fpm
           - php8.4-fpm-xdebug
       dry_run:
-        description: 'Dry run (don't actually delete)'
+        description: 'Dry run (dont actually delete)'
         required: true
         type: boolean
         default: true
