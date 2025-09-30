@@ -1,0 +1,181 @@
+name: Debug Package Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to cleanup'
+        required: true
+        type: choice
+        options:
+          - php8.4-fpm
+          - php8.4-fpm-xdebug
+      dry_run:
+        description: 'Dry run (don't actually delete)'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  debug_cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Install crane
+        uses: iarekylew00t/crane-installer@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Debug - Show environment
+        run: |
+          echo "=== Environment Info ==="
+          echo "Repository: ${{ github.repository }}"
+          echo "Repository Owner: ${{ github.repository_owner }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Service: ${{ inputs.service }}"
+          echo "Dry Run: ${{ inputs.dry_run }}"
+          echo ""
+
+      - name: Debug - Check crane authentication
+        run: |
+          echo "=== Testing Crane Authentication ==="
+          echo "${{ secrets.GITHUB_TOKEN }}" | crane auth login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "✓ Crane authentication successful"
+          echo ""
+
+      - name: Debug - List tags with crane
+        run: |
+          echo "=== Listing Tags with Crane ==="
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="ghcr.io/$OWNER/${{ inputs.service }}"
+          echo "Image: $IMAGE_NAME"
+          echo ""
+          
+          if crane ls $IMAGE_NAME 2>&1; then
+            echo ""
+            echo "✓ Successfully listed tags"
+          else
+            echo ""
+            echo "✗ Failed to list tags"
+            exit 1
+          fi
+          echo ""
+
+      - name: Debug - List packages via GitHub API
+        run: |
+          echo "=== Listing Packages via GitHub API ==="
+          OWNER="${{ github.repository_owner }}"
+          PACKAGE_NAME="${{ inputs.service }}"
+          
+          echo "API URL: https://api.github.com/users/$OWNER/packages/container/$PACKAGE_NAME/versions"
+          echo ""
+          
+          RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/$OWNER/packages/container/$PACKAGE_NAME/versions")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d':' -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+          
+          echo "HTTP Status Code: $HTTP_CODE"
+          echo ""
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✓ API call successful"
+            echo ""
+            echo "Package versions:"
+            echo "$BODY" | jq -r '.[] | "ID: \(.id) | Tags: \(.metadata.container.tags // [] | join(", ")) | Created: \(.created_at)"'
+          else
+            echo "✗ API call failed"
+            echo "Response:"
+            echo "$BODY"
+          fi
+          echo ""
+
+      - name: Debug - Show what would be deleted (Crane method)
+        run: |
+          echo "=== Tags to Delete (Crane Method) ==="
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="ghcr.io/$OWNER/${{ inputs.service }}"
+          
+          TAGS=$(crane ls $IMAGE_NAME 2>/dev/null || echo "")
+          
+          if [ -z "$TAGS" ]; then
+            echo "No tags found"
+          else
+            for TAG in $TAGS; do
+              if [ "$TAG" != "latest" ]; then
+                echo "Would delete: $IMAGE_NAME:$TAG"
+              else
+                echo "Would keep: $IMAGE_NAME:$TAG (latest tag)"
+              fi
+            done
+          fi
+          echo ""
+
+      - name: Debug - Show what would be deleted (API method)
+        run: |
+          echo "=== Versions to Delete (API Method) ==="
+          OWNER="${{ github.repository_owner }}"
+          PACKAGE_NAME="${{ inputs.service }}"
+          
+          VERSIONS=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/$OWNER/packages/container/$PACKAGE_NAME/versions")
+          
+          echo "$VERSIONS" | jq -r '.[] | 
+            if (.metadata.container.tags | length == 0) then
+              "Would delete (untagged): ID \(.id) | Created: \(.created_at)"
+            elif (.metadata.container.tags | contains(["latest"]) | not) then
+              "Would delete: ID \(.id) | Tags: \(.metadata.container.tags | join(", ")) | Created: \(.created_at)"
+            else
+              "Would keep: ID \(.id) | Tags: \(.metadata.container.tags | join(", ")) (has latest tag)"
+            end'
+          echo ""
+
+      - name: Cleanup - Delete old tags (if not dry run)
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          echo "=== Starting Cleanup ==="
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="ghcr.io/$OWNER/${{ inputs.service }}"
+          
+          TAGS=$(crane ls $IMAGE_NAME 2>/dev/null || echo "")
+          
+          if [ -z "$TAGS" ]; then
+            echo "No tags to delete"
+            exit 0
+          fi
+          
+          for TAG in $TAGS; do
+            if [ "$TAG" != "latest" ]; then
+              echo "Deleting: $IMAGE_NAME:$TAG"
+              if crane delete $IMAGE_NAME:$TAG 2>&1; then
+                echo "✓ Successfully deleted $TAG"
+              else
+                echo "✗ Failed to delete $TAG"
+              fi
+            fi
+          done
+          echo ""
+          echo "Cleanup complete!"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== Summary ==="
+          echo "Service: ${{ inputs.service }}"
+          echo "Dry Run: ${{ inputs.dry_run }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo ""
+            echo "ℹ️  This was a dry run. No packages were deleted."
+            echo "   Review the output above and run again with dry_run=false to actually delete."
+          else
+            echo ""
+            echo "✓ Cleanup executed"
+          fi
